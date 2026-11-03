@@ -1,6 +1,6 @@
 /** Discord's limit for one message's text. */
 export const DISCORD_LIMIT = 2000;
-const USERNAME = "Meme coin bot (paper)";
+const USERNAME = "The Watchman (paper)";
 const HOSTS = new Set(["discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"]);
 
 /**

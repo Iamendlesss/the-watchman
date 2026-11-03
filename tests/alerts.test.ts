@@ -66,7 +66,7 @@ describe("DiscordNotifier", () => {
     await n.flush(1000);
     expect(n.sent).toBe(1);
     expect(f.calls[0]!.url).toBe(URL_);
-    expect(f.calls[0]!.body).toMatchObject({ content: "hi @everyone", allowed_mentions: { parse: [] } });
+    expect(f.calls[0]!.body).toMatchObject({ content: "hi @everyone", username: "The Watchman (paper)", allowed_mentions: { parse: [] } });
   });
 
   it("joins messages that back up into one post, keeps a gap between posts, and cuts text at Discord's limit", async () => {

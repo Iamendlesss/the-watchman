@@ -1,6 +1,6 @@
-# solana-meme-coin-trader (phase 4 of 6)
+# The Watchman (phase 4 of 6)
 
-A paper-first Solana meme coin trading bot. **Nothing here can trade real money.** Phase 1 built the foundation
+The Watchman is a paper-first Solana meme coin trading bot. **Nothing here can trade real money.** Phase 1 built the foundation
 (config, ledger, risk manager, paper executor). Phase 2 adds a read-only launch scanner and the safety gate.
 
 | Piece | File | What it does |
@@ -26,7 +26,7 @@ Later phases: 3b momentum strategy (graduated/trending coins), 5 live executor, 
 ## Setup (Mac)
 
 1. Node.js 22 or newer (`node -v`).
-2. `cd ~/Documents/solana-meme-coin-trader`
+2. `git clone https://github.com/Iamendlesss/the-watchman.git && cd the-watchman`
 3. `npm install`
 4. `npm install-scripts approve esbuild` (once, if npm asks)
 5. `cp config/config.example.json config/config.json` (paper wallet defaults to 3.75 SOL, about $300)

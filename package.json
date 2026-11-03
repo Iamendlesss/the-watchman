@@ -1,9 +1,9 @@
 {
-  "name": "solana-meme-coin-trader",
+  "name": "the-watchman",
   "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "Paper-first Solana meme coin trading bot (phase 4: Discord alerts and daily reports)",
+  "description": "The Watchman: a paper-first Solana meme coin trading bot (phase 4: Discord alerts and daily reports)",
   "engines": {
     "node": ">=22"
   },
