@@ -1,5 +1,5 @@
 # Rule examples are dangerous on purpose, and test fixtures are not shipped code.
-.semgrep/
+security/semgrep/
 tests/
 node_modules/
 idl/

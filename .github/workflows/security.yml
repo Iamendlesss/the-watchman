@@ -71,13 +71,17 @@ jobs:
         p/typescript
         p/nodejs
         p/security-audit
-        .semgrep/watchman-controls.yml
+        security/semgrep/watchman-controls.yml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Prove the custom rules catch what they claim
-        run: semgrep --test --config .semgrep/ .semgrep/
+        # semgrep --test also passes when it finds nothing to test, so check that it really ran.
+        run: |
+          semgrep --test --config security/semgrep/ security/semgrep/ > rule-tests.txt 2>&1 || { cat rule-tests.txt; exit 1; }
+          cat rule-tests.txt
+          ! grep -q "No unit tests found" rule-tests.txt
       - name: Scan and record every finding
         run: semgrep scan --metrics=off --sarif --output semgrep.sarif
       - name: Publish findings to the Security tab
