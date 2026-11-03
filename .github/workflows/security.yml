@@ -53,8 +53,9 @@ jobs:
           curl -sSfL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
           tar -xzf gitleaks.tar.gz gitleaks
-      - name: Scan the full git history
-        run: ./gitleaks git . --redact --verbose --exit-code 1
+      - name: Scan the full history of this change
+        # HEAD's history only, so a secret on someone else's branch cannot fail an unrelated change.
+        run: ./gitleaks git . --log-opts="HEAD" --redact --verbose --exit-code 1
 
   code:
     name: Code scan
@@ -81,7 +82,7 @@ jobs:
         run: |
           semgrep --test --config security/semgrep/ security/semgrep/ > rule-tests.txt 2>&1 || { cat rule-tests.txt; exit 1; }
           cat rule-tests.txt
-          ! grep -q "No unit tests found" rule-tests.txt
+          grep -q "All tests passed" rule-tests.txt
       - name: Scan and record every finding
         run: semgrep scan --metrics=off --sarif --output semgrep.sarif
       - name: Publish findings to the Security tab
