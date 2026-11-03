@@ -1,0 +1,84 @@
+{
+  "mode": "paper",
+  "wallet": {
+    "startingSol": 3.75,
+    "minSolReserve": 0.05
+  },
+  "sizing": {
+    "positionPct": 0.03,
+    "maxOpenPositions": 4
+  },
+  "risk": {
+    "dailyLossHaltPct": 0.35,
+    "hardStopLossPct": 0.25,
+    "maxSlippagePct": 0.1,
+    "maxRoundTripCostPct": 0.06,
+    "consecutiveLossPause": {
+      "losses": 4,
+      "cooldownMinutes": 60
+    }
+  },
+  "exits": {
+    "initialRecoveryMultiple": 2,
+    "trailingStopPct": 0.25,
+    "timeStopMinutes": {
+      "snipe": 30,
+      "momentum": 120
+    },
+    "timeStopMinGainPct": 0.2,
+    "creatorDumpExitPct": 0.5,
+    "secondTargetMultiple": 2
+  },
+  "safety": {
+    "top10HolderCapPct": 0.15,
+    "maxCreatorHoldPct": 0.2,
+    "maxCreatorSoldPct": 0.25,
+    "maxBundledPct": 0.25,
+    "minUniqueBuyers": 15,
+    "minBuySellRatio": 1,
+    "minRealSol": 20,
+    "requireSolQuote": true,
+    "rejectMayhemMode": true,
+    "requireMintCheck": true,
+    "useRugcheck": true,
+    "rugcheckRequired": false,
+    "maxRealSol": 55
+  },
+  "fees": {
+    "baseFeeSol": 5e-06,
+    "priorityFeeSol": 0.0005,
+    "senderTipSol": 5e-06,
+    "ataRentSol": 0.00203928
+  },
+  "paper": {
+    "extraSlippagePct": 0.01,
+    "restartHaircutPct": 0.1,
+    "defaultTradeFeePct": 0.0125
+  },
+  "paths": {
+    "dbPath": "data/ledger.sqlite",
+    "stopFile": "STOP"
+  },
+  "scanner": {
+    "observationSeconds": 180,
+    "earlyCheckSeconds": 60,
+    "earlyMinBuyers": 4,
+    "earlyMinSol": 0.5,
+    "backfillMaxTxs": 30,
+    "bundleSlots": 2,
+    "maxTracked": 5000,
+    "heliusWsBase": "wss://mainnet.helius-rpc.com",
+    "heliusRpcBase": "https://mainnet.helius-rpc.com",
+    "stallSeconds": 60,
+    "streamConnections": 2,
+    "streamStaggerSeconds": 20,
+    "rugchecksPerMinute": 8,
+    "dailyCreditBudget": 30000
+  },
+  "alerts": {
+    "enabled": true,
+    "dailyReportHourUtc": 7,
+    "heartbeatHours": 6,
+    "streamDownAlertSeconds": 60
+  }
+}

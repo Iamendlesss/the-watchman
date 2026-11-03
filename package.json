@@ -1,0 +1,41 @@
+{
+  "name": "solana-meme-coin-trader",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Paper-first Solana meme coin trading bot (phase 4: Discord alerts and daily reports)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check-env": "tsx src/cli.ts check-env",
+    "demo": "tsx src/cli.ts demo",
+    "status": "tsx src/cli.ts status",
+    "report": "tsx src/cli.ts report",
+    "resume": "tsx src/cli.ts resume",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "scan": "tsx src/cli.ts scan",
+    "paper": "tsx src/cli.ts paper",
+    "analyze": "tsx src/cli.ts analyze",
+    "discord-test": "tsx src/cli.ts discord-test",
+    "daily-report": "tsx src/cli.ts daily-report"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "dotenv": "18.0.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "26.6.2",
+    "@types/ws": "8.18.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1",
+    "ws": "8.21.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

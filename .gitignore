@@ -1,0 +1,15 @@
+# Secrets: never commit or share these
+.env
+.env.*
+!.env.example
+*.keypair.json
+
+# Runtime files
+node_modules/
+data/
+STOP
+*.log
+
+# Mac and local tool files
+.DS_Store
+.claude/settings.local.json
