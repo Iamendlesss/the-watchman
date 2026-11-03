@@ -1,0 +1,73 @@
+# Guards for controls the threat model confirmed are working. A failure here means a change
+# removed one of them, on purpose or by accident:
+# https://github.com/Iamendlesss/the-watchman-threat-model
+rules:
+  - id: watchman-no-signing-library
+    message: >-
+      This imports a wallet or signing library. The bot has no signing code by design, and live mode
+      needs the separate signer described in the threat model (gates G-02 and G-03) first.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      threats: [T-19, T-25]
+    patterns:
+      - pattern-either:
+          - pattern: import $A from "$MOD"
+          - pattern: import { $A } from "$MOD"
+          - pattern: import * as $A from "$MOD"
+          - pattern: require("$MOD")
+          - pattern: import("$MOD")
+      - metavariable-regex:
+          metavariable: $MOD
+          regex: ^(@solana/.*|@noble/.*|tweetnacl.*|bs58|ed25519.*|bip39|ethers)$
+
+  - id: watchman-no-process-spawn
+    message: >-
+      This imports a module that can run other programs or code. Nothing in the bot needs that, and it
+      would give a compromised dependency or a crafted coin name far more reach.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      threats: [T-21, T-24]
+    patterns:
+      - pattern-either:
+          - pattern: import $A from "$MOD"
+          - pattern: import { $A } from "$MOD"
+          - pattern: import * as $A from "$MOD"
+          - pattern: require("$MOD")
+          - pattern: import("$MOD")
+      - metavariable-regex:
+          metavariable: $MOD
+          regex: ^(node:)?(child_process|vm)$
+
+  - id: watchman-no-dynamic-code
+    message: This runs a string as code. Coin names and API replies are attacker-chosen text, so this must never exist.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      threats: [T-21, T-24]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+
+  - id: watchman-no-trading-key-read
+    message: >-
+      This reads the trading key from the environment. In paper mode nothing may load it, and in live mode
+      only a separate signer may hold it (threat model gate G-02).
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      threats: [T-19]
+    pattern-either:
+      - pattern: process.env.TRADER_PRIVATE_KEY
+      - pattern: process.env["TRADER_PRIVATE_KEY"]
+
+  - id: watchman-sql-from-data
+    message: This builds SQL from a value. Use a `?` placeholder, because coin names come straight from the chain.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      threats: [T-12]
+    patterns:
+      - pattern: $DB.prepare(`...${$VALUE}...`)
+      - pattern-not: '$DB.prepare(`...${$COND ? "..." : "..."}...`)'
