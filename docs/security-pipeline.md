@@ -27,6 +27,8 @@ flowchart TB
 | Code scan | High severity (`ERROR`) findings | Lower severities, listed in the Security tab |
 | Tests and types | Any failure | Nothing |
 
+`main` is protected, and the Security gate is a required check for everyone, including the repository owner. All changes go through a pull request, the branch must be up to date before it merges, and force-pushes and branch deletion are blocked.
+
 ## Custom rules
 
 The rules in [`security/semgrep/watchman-controls.yml`](../security/semgrep/watchman-controls.yml) protect things the threat model found working, so a later change cannot quietly remove them. Each rule has examples in [`security/semgrep/watchman-controls.ts`](../security/semgrep/watchman-controls.ts), and the pipeline tests the rules against those examples before it trusts them.
@@ -62,9 +64,10 @@ One exception is active, for a high severity `zod` advisory, and it expires on 1
 | [First run](https://github.com/Iamendlesss/the-watchman/actions/runs/41564012338) | Blocked | Three high advisories in the lockfile, in `vite`, `source-map-js` and `zod`. The logs also exposed a flaw in the pipeline itself: the rule tests found nothing to test and passed anyway. |
 | [Second run](https://github.com/Iamendlesss/the-watchman/actions/runs/41564303338) | Blocked | Upgrading `vitest` cleared the development tools, and the rule tests now ran for real (5 of 5). `zod` still blocked. |
 | [Third run](https://github.com/Iamendlesss/the-watchman/actions/runs/41564459816) | Passed | `zod` was accepted with a dated exception after testing the upgrade. |
-| [Demo pull request](https://github.com/Iamendlesss/the-watchman/pull/2) | Blocked | Planted code that runs a coin name with `eval`, starts a shell, reads the trading key and holds a made-up API key. The Secret scan and Code scan failed while the audit and tests still passed. |
+| [First demo](https://github.com/Iamendlesss/the-watchman/pull/2) | Blocked | Planted code that runs a coin name with `eval`, starts a shell, reads the trading key and holds a made-up API key. The Secret scan and Code scan failed while the audit and tests still passed. |
+| [Second demo](https://github.com/Iamendlesss/the-watchman/pull/5) | Blocked | The same code, against protected `main`. GitHub refused the merge because the required Security gate failed. |
 
-All three code problems in the demo were caught by the custom rules. The standard rulesets raised nothing at blocking severity, which is why rules written from the threat model are worth having.
+All three code problems in the demos were caught by the custom rules. The standard rulesets raised nothing at blocking severity, which is why rules written from the threat model are worth having.
 
 ## Run it locally
 
