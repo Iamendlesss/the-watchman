@@ -53,6 +53,19 @@ The test suite guards one more control: `tests/config.test.ts` fails if live mod
 
 Sometimes the right call is to accept a finding for a limited time, so the gate supports exceptions in [`security/audit-exceptions.json`](../security/audit-exceptions.json). An exception must name one advisory and one package, give a reason, and carry an expiry date. Once it expires, the build fails again, so nothing can be accepted and forgotten.
 
+One exception is active, for a high severity `zod` advisory, and it expires on 1 February 2027. Only `src/config.ts` uses `zod`, on a local file, so network input cannot reach the affected code. The only fix is `zod` 4, and a trial upgrade failed 35 tests, including the risk defaults and the live-mode refusal. That makes it a planned migration, not a quick bump.
+
+## Proof it works
+
+| Run | Result | What it showed |
+|---|---|---|
+| [First run](https://github.com/Iamendlesss/the-watchman/actions/runs/41564012338) | Blocked | Three high advisories in the lockfile, in `vite`, `source-map-js` and `zod`. The logs also exposed a flaw in the pipeline itself: the rule tests found nothing to test and passed anyway. |
+| [Second run](https://github.com/Iamendlesss/the-watchman/actions/runs/41564303338) | Blocked | Upgrading `vitest` cleared the development tools, and the rule tests now ran for real (5 of 5). `zod` still blocked. |
+| [Third run](https://github.com/Iamendlesss/the-watchman/actions/runs/41564459816) | Passed | `zod` was accepted with a dated exception after testing the upgrade. |
+| [Demo pull request](https://github.com/Iamendlesss/the-watchman/pull/2) | Blocked | Planted code that runs a coin name with `eval`, starts a shell, reads the trading key and holds a made-up API key. The Secret scan and Code scan failed while the audit and tests still passed. |
+
+All three code problems in the demo were caught by the custom rules. The standard rulesets raised nothing at blocking severity, which is why rules written from the threat model are worth having.
+
 ## Run it locally
 
 ```bash
