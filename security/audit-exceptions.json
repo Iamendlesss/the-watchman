@@ -1,0 +1,11 @@
+{
+  "exceptions": [
+    {
+      "advisory": "GHSA-mrhx-c7xc-m3w5",
+      "package": "zod",
+      "reason": "Only src/config.ts uses zod, to validate the local config file, and its schema has no collections, so no network input can reach the affected code. The only fix is zod 4. A trial upgrade on 2026-11-03 failed 35 tests, including the risk defaults and the live-mode refusal, so it needs a planned migration rather than a quick bump.",
+      "approvedOn": "2026-11-03",
+      "expires": "2027-02-01"
+    }
+  ]
+}

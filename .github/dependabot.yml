@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7 # Brand new releases are where malicious versions tend to show up.
+    groups:
+      dev-tools:
+        dependency-type: development
+    ignore:
+      # zod 4 needs a code migration (35 tests fail on a plain upgrade). The exception in
+      # security/audit-exceptions.json expires, which forces this to be looked at again.
+      - dependency-name: zod
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

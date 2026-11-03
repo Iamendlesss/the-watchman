@@ -1,0 +1,125 @@
+name: Security pipeline
+
+# Every pull request and every push to main has to pass the "Security gate" job.
+# docs/security-pipeline.md explains what blocks a merge and why.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 6 * * 1" # Mondays: new advisories appear even when the code does not change.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Run npm audit against the lockfile
+        # npm audit exits non-zero when it finds something. The gate below makes the decision,
+        # and it fails closed if this step produced no usable report.
+        run: npm audit --package-lock-only --json > audit.json || true
+      - name: Block on high or critical findings
+        run: node scripts/audit-gate.ts audit.json security/audit-exceptions.json
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # A secret removed from the latest commit is still in the history.
+          persist-credentials: false
+      - name: Download Gitleaks and check its hash
+        run: |
+          curl -sSfL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+      - name: Scan the full history of this change
+        # HEAD's history only, so a secret on someone else's branch cannot fail an unrelated change.
+        run: ./gitleaks git . --log-opts="HEAD" --redact --verbose --exit-code 1
+
+  code:
+    name: Code scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    container:
+      image: semgrep/semgrep:1.183.0@sha256:2e45517a85e13a9cca14a2a00df6bb48affd66b8ebfae1b0991cd57578362fb0
+    permissions:
+      contents: read
+      security-events: write # Only this job may publish results to the Security tab.
+    env:
+      SEMGREP_RULES: >-
+        p/javascript
+        p/typescript
+        p/nodejs
+        p/security-audit
+        security/semgrep/watchman-controls.yml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prove the custom rules catch what they claim
+        # semgrep --test also passes when it finds nothing to test, so check that it really ran.
+        run: |
+          semgrep --test --config security/semgrep/ security/semgrep/ > rule-tests.txt 2>&1 || { cat rule-tests.txt; exit 1; }
+          cat rule-tests.txt
+          grep -q "All tests passed" rule-tests.txt
+      - name: Scan and record every finding
+        run: semgrep scan --metrics=off --sarif --output semgrep.sarif
+      - name: Publish findings to the Security tab
+        if: ${{ github.event.pull_request.head.repo.fork != true }}
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+      - name: Block on high severity findings
+        run: semgrep scan --metrics=off --severity ERROR --error
+
+  tests:
+    name: Tests and types
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      # These tests also guard security controls, such as live mode being refused.
+      - run: npm test
+
+  gate:
+    name: Security gate
+    if: ${{ always() }}
+    needs: [dependencies, secrets, code, tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every check to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null

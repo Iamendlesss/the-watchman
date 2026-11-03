@@ -1,5 +1,7 @@
 # The Watchman (phase 4 of 6)
 
+[![Security pipeline](https://github.com/Iamendlesss/the-watchman/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/Iamendlesss/the-watchman/actions/workflows/security.yml)
+
 The Watchman is a paper-first Solana meme coin trading bot. **Nothing here can trade real money.** Phase 1 built the foundation
 (config, ledger, risk manager, paper executor). Phase 2 adds a read-only launch scanner and the safety gate.
 
@@ -22,6 +24,18 @@ The Watchman is a paper-first Solana meme coin trading bot. **Nothing here can t
 | Alerts | `src/alerts/*` | Discord webhook sender, alert texts, daily report, and when each one goes out |
 
 Later phases: 3b momentum strategy (graduated/trending coins), 5 live executor, 6 skill + docs.
+
+## Security
+
+The [threat model](https://github.com/Iamendlesss/the-watchman-threat-model) maps what could go wrong and what must exist before live trading. The [security pipeline](docs/security-pipeline.md) enforces part of it on every change.
+
+```mermaid
+flowchart LR
+    PR["Pull request"] --> CHECKS["Dependency audit<br/>Secret scan<br/>Code scan<br/>Tests and types"]
+    CHECKS --> GATE{"Security gate"}
+    GATE -->|"all pass"| MERGE["Merge allowed"]
+    GATE -->|"any fail"| BLOCK["Merge blocked"]
+```
 
 ## Setup (Mac)
 
