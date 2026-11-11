@@ -35,11 +35,17 @@ export interface RugcheckSummary {
  * Defensive parse of a RugCheck token report. The field names (`risks[].level`, `risks[].name`) come from
  * third-party descriptions of the API and are not yet confirmed against its Swagger page; the scan command
  * prints the top-level keys it sees so the parse can be checked against real responses.
+ *
+ * A reply without a `risks` list, or with a risk that has no level, returns null so the caller treats it as an
+ * error. Reading it as "no risks" would record an unchecked coin as checked, and let it past even when RugCheck
+ * is required.
  */
 export function summarizeRugcheck(json: unknown): RugcheckSummary | null {
-  if (!json || typeof json !== "object") return null;
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
   const o = json as Record<string, unknown>;
-  const risks = Array.isArray(o.risks) ? (o.risks as Record<string, unknown>[]) : [];
+  if (!Array.isArray(o.risks)) return null;
+  const risks = o.risks as Record<string, unknown>[];
+  if (!risks.every((r) => r !== null && typeof r === "object" && typeof r.level === "string")) return null;
   const level = (r: Record<string, unknown>) => String(r.level ?? "").toLowerCase();
   const dangers = risks.filter((r) => level(r) === "danger");
   const score = typeof o.score_normalised === "number" ? o.score_normalised : typeof o.score === "number" ? o.score : null;
