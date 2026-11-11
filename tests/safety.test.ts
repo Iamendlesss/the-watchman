@@ -94,8 +94,15 @@ describe("RugCheck", () => {
     const s = summarizeRugcheck({ score_normalised: 12, risks: [{ name: "Mutable metadata", level: "warn" }, { name: "Creator sold", level: "danger" }], rugged: false });
     expect(s).toMatchObject({ dangerCount: 1, warnCount: 1, dangerNames: ["Creator sold"], score: 12 });
     expect(s?.topLevelKeys).toContain("risks");
-    expect(summarizeRugcheck({})?.dangerCount).toBe(0);
     expect(summarizeRugcheck("nope")).toBeNull();
+  });
+  it("treats a reply it cannot read as unusable, never as safe", () => {
+    expect(summarizeRugcheck({})).toBeNull();
+    expect(summarizeRugcheck([])).toBeNull();
+    expect(summarizeRugcheck({ issues: [{ name: "Honeypot", level: "danger" }] })).toBeNull(); // field renamed
+    expect(summarizeRugcheck({ risks: "none" })).toBeNull();
+    expect(summarizeRugcheck({ risks: [{ name: "Honeypot" }] })).toBeNull(); // no level to judge
+    expect(summarizeRugcheck({ risks: [] })).toMatchObject({ dangerCount: 0 }); // a real empty list is still fine
   });
   it("token bucket enforces the per-minute budget and refills", () => {
     let now = 0;
@@ -111,6 +118,7 @@ describe("RugCheck", () => {
     expect((await fetchRugcheck("M", bucket(), undefined, mk(200, { risks: [] }))).status).toBe("ok");
     expect((await fetchRugcheck("M", bucket(), undefined, mk(429))).status).toBe("skipped");
     expect((await fetchRugcheck("M", bucket(), undefined, mk(500))).status).toBe("error");
+    expect(await fetchRugcheck("M", bucket(), undefined, mk(200, {}))).toEqual({ status: "error", reason: "unexpected response shape" });
     const boom = (async () => { throw new Error("x"); }) as typeof fetch;
     expect((await fetchRugcheck("M", bucket(), undefined, boom)).status).toBe("error");
     const spent = new TokenBucket(1, () => 0);
@@ -171,6 +179,19 @@ describe("judge (full pipeline)", () => {
     expect(soft.notes.join()).toMatch(/RugCheck skipped/);
     const hard = await judge(good, deps(f, { safety: { rugcheckRequired: true } }));
     expect(hard).toMatchObject({ pass: false, failed: ["RUGCHECK_AVAILABLE"] });
+  });
+  // RugCheck renames its risks field and reports a danger the parser can no longer see.
+  const renamed = () => new Response(JSON.stringify({ issues: [{ name: "Honeypot", level: "danger" }] }));
+  it("never records a reply in an unexpected shape as checked and safe", async () => {
+    const { f } = router({ rug: renamed });
+    const v = await judge(good, deps(f));
+    expect(v.checks.find((c) => c.rule === "RUGCHECK_DANGER")).toBeUndefined();
+    expect(v.notes.join()).toMatch(/unexpected response shape/);
+  });
+  it("rejects a reply in an unexpected shape when RugCheck is required", async () => {
+    const { f } = router({ rug: renamed });
+    const v = await judge(good, deps(f, { safety: { rugcheckRequired: true } }));
+    expect(v).toMatchObject({ pass: false, failed: ["RUGCHECK_AVAILABLE"] });
   });
   it("fails closed when the mint account is unreadable", async () => {
     const { f } = router({ mint: { result: { value: null } } });
