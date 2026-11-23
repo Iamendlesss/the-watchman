@@ -213,6 +213,18 @@ describe("usage meter", () => {
     expect(r.streamCredits).toBe(0);
     expect(r.creditsUsed).toBe(4);
   });
+  it("bills only the Helius backup's data when the main stream is free", () => {
+    let now = 0;
+    const m = new UsageMeter(() => now, false);
+    m.add(3_000_000); // free provider
+    m.add(1_000_000, true); // Helius backup
+    now = 60_000;
+    const r = m.report();
+    expect(r.megabytes).toBeCloseTo(4, 9);
+    expect(r.meteredMegabytes).toBeCloseTo(1, 9);
+    expect(r.streamCredits).toBeCloseTo(20, 6);
+    expect(r.messages).toBe(2);
+  });
   it("adds RPC calls to the credit total", () => {
     let now = 0;
     const m = new UsageMeter(() => now);

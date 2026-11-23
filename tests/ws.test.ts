@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
 import { LogStream, RedundantLogStream } from "../src/scanner/ws";
 
-let server: WebSocketServer | undefined;
+const servers: WebSocketServer[] = [];
 let stream: LogStream | undefined;
 let redundant: RedundantLogStream | undefined;
 afterEach(() => {
   stream?.stop();
   redundant?.stop();
   redundant = undefined;
-  server?.close();
+  servers.splice(0).forEach((s) => s.close());
 });
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -26,11 +26,15 @@ const notification = (subscription: number, slot: number, logs: string[], err: u
     params: { subscription, result: { context: { slot }, value: { signature: `sig${slot}`, err, logs } } },
   });
 
-/** A mock Helius: hands out subscription ids, records requests, and lets a test push notifications. */
+/**
+ * A mock Helius: hands out subscription ids, records requests, and lets a test push notifications. Setting
+ * `accept` to false refuses new connections, like a provider that is down.
+ */
 function mockServer() {
-  const wss = new WebSocketServer({ port: 0 });
-  server = wss;
+  const wss = new WebSocketServer({ port: 0, verifyClient: () => state.accept });
+  servers.push(wss);
   const state = {
+    accept: true,
     port: (wss.address() as { port: number }).port,
     subs: new Map<number, string>(), // subscription id -> mentioned address
     requests: [] as Array<{ method: string; params: unknown[] }>,
@@ -117,7 +121,7 @@ describe("LogStream", () => {
 
   it("cancels a subscription that is unsubscribed before the server has answered", async () => {
     const srv = mockServer();
-    const wss = server!;
+    const wss = servers.at(-1)!;
     // Delay the reply so the unsubscribe happens while the request is still in flight.
     wss.removeAllListeners("connection");
     wss.on("connection", (s: WsSocket) => {
@@ -135,6 +139,30 @@ describe("LogStream", () => {
     await until(() => srv.unsubscribed.length === 1);
     expect(srv.unsubscribed).toEqual([555]);
   });
+
+  it("can be stopped and started again, re-creating its subscriptions, without reporting a close it never opened", async () => {
+    const srv = mockServer();
+    const status: string[] = [];
+    const changes: boolean[] = [];
+    const subscribed: string[] = [];
+    stream = new LogStream({
+      url: `ws://127.0.0.1:${srv.port}`,
+      onStatus: (m) => status.push(m),
+      onConnectionChange: (open) => changes.push(open),
+      onSubscribed: (id) => subscribed.push(id),
+    });
+    stream.subscribe("A", "ADDR_A", () => {});
+    stream.start();
+    await until(() => subscribed.length === 1);
+    stream.stop();
+    srv.accept = false;
+    stream.start(); // this first attempt is refused
+    await until(() => status.some((m) => m.startsWith("disconnected")));
+    srv.accept = true;
+    await until(() => subscribed.length === 2, 6000);
+    expect(changes).toEqual([true, true]);
+    expect(srv.subs.size).toBe(2); // the subscription was created again on the new connection
+  }, 10_000);
 
   it("replaces a connection that goes silent straight away, with one message per stall", async () => {
     const srv = mockServer(); // answers subscriptions but never sends any data
@@ -281,4 +309,105 @@ describe("RedundantLogStream", () => {
     expect(status[0]).toMatch(/^connected/);
     expect(srv.sockets).toHaveLength(1);
   });
+});
+
+describe("RedundantLogStream backup connection", () => {
+  it("opens only after every main connection has been down a while, and closes once one has stayed up", async () => {
+    const main = mockServer();
+    const backup = mockServer();
+    const mainLive: Array<{ sock: WsSocket; subId: number }> = [];
+    const backupLive: Array<{ sock: WsSocket; subId: number }> = [];
+    main.onSubscribe = (sock, subId) => mainLive.push({ sock, subId });
+    backup.onSubscribe = (sock, subId) => backupLive.push({ sock, subId });
+    const slots: number[] = [];
+    const status: string[] = [];
+    const blind: boolean[] = [];
+    let mainBytes = 0;
+    let backupBytes = 0;
+    redundant = new RedundantLogStream({
+      url: `ws://127.0.0.1:${main.port}`,
+      connections: 1,
+      onBytes: (n) => (mainBytes += n),
+      onStatus: (m) => status.push(m),
+      onBlindChange: (b) => blind.push(b),
+      backup: {
+        url: `ws://127.0.0.1:${backup.port}/?api-key=secret`,
+        label: "Helius",
+        afterMs: 300,
+        holdMs: 1500,
+        onBytes: (n) => (backupBytes += n),
+      },
+    });
+    redundant.subscribe("A", "ADDR_A", (slot) => slots.push(slot));
+    redundant.start();
+    await until(() => mainLive.length === 1);
+    await wait(600); // longer than afterMs: a healthy main connection never opens the backup
+    expect(backup.sockets).toHaveLength(0);
+
+    // The main provider goes down and refuses to come back for now.
+    main.accept = false;
+    mainLive[0]!.sock.terminate();
+    await until(() => backupLive.length === 1);
+    expect(status.join("\n")).toMatch(/\[Helius\] every main connection has been down for 0\.\ds; opening the backup/);
+    const mainBytesBefore = mainBytes;
+    backupLive[0]!.sock.send(notification(backupLive[0]!.subId, 5, ["via backup"]));
+    await until(() => slots.includes(5));
+    expect(backupBytes).toBeGreaterThan(0);
+    expect(mainBytes).toBe(mainBytesBefore); // the backup's data is counted apart from the main stream's
+    expect(blind).toEqual([true, false]);
+    expect(redundant.blindMs).toBeLessThan(2000);
+
+    // The main provider is back. While both are open, a transaction on both is delivered once.
+    main.accept = true;
+    await until(() => mainLive.length === 2, 8000);
+    mainLive[1]!.sock.send(notification(mainLive[1]!.subId, 6, ["both"]));
+    backupLive[0]!.sock.send(notification(backupLive[0]!.subId, 6, ["both"]));
+    await until(() => slots.includes(6));
+    await wait(100);
+    expect(slots.filter((s) => s === 6)).toHaveLength(1);
+
+    // Once the main connection has stayed up for holdMs, the backup closes, and that is not blind time.
+    await until(() => status.some((m) => m.includes("closing the backup: a main connection has been up")), 5000);
+    await until(() => backup.sockets.every((s) => s.readyState === s.CLOSED));
+    expect(redundant.backupUses).toBe(1);
+    expect(redundant.backupMs).toBeGreaterThan(1000);
+    expect(blind).toEqual([true, false]);
+    expect(status.join("\n")).not.toMatch(/127\.0\.0\.1|secret/);
+  }, 20_000);
+
+  it("stays shut while blocked (for example by its credit cap), and closes when it becomes blocked", async () => {
+    const main = mockServer();
+    const backup = mockServer();
+    let mainSock: WsSocket | undefined;
+    main.onSubscribe = (sock) => (mainSock = sock);
+    const status: string[] = [];
+    const blind: boolean[] = [];
+    let blocked: string | null = "cap used up";
+    redundant = new RedundantLogStream({
+      url: `ws://127.0.0.1:${main.port}`,
+      connections: 1,
+      onStatus: (m) => status.push(m),
+      onBlindChange: (b) => blind.push(b),
+      backup: { url: `ws://127.0.0.1:${backup.port}`, label: "Helius", afterMs: 100, holdMs: 0, blocked: () => blocked },
+    });
+    redundant.subscribe("A", "ADDR_A", () => {});
+    redundant.start();
+    await until(() => mainSock !== undefined);
+    main.accept = false;
+    mainSock!.terminate();
+    await until(() => status.some((m) => m === "[Helius] backup not opened: cap used up"));
+    await wait(400);
+    expect(backup.sockets).toHaveLength(0);
+    expect(redundant.backupUses).toBe(0);
+    expect(status.filter((m) => m.includes("backup not opened"))).toHaveLength(1); // said once, not every check
+
+    blocked = null; // the cap is lifted: the main connection is still down, so the backup opens
+    await until(() => backup.subs.size === 1);
+    expect(blind).toEqual([true, false]);
+
+    blocked = "cap used up"; // the cap is reached while it is open: it closes, and the bot is blind again
+    await until(() => status.some((m) => m === "[Helius] closing the backup: cap used up"));
+    expect(blind).toEqual([true, false, true]);
+    expect(redundant.backupUses).toBe(1);
+  }, 15_000);
 });

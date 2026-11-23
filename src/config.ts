@@ -100,6 +100,14 @@ export const ConfigSchema = z
         streamConnections: z.number().int().min(1).max(4).default(2),
         // Delay between starting each of those connections, so they don't drop in step.
         streamStaggerSeconds: z.number().min(0).default(20),
+        // Helius backup for the free stream (approved 2026-11-19): a Helius connection opens only once every free
+        // connection has been down this long, and closes once a free connection has stayed up for
+        // backupHoldSeconds. Its data costs Helius credits. Used only with STREAM_WS_URL set.
+        backupAfterSeconds: z.number().positive().default(5),
+        backupHoldSeconds: z.number().min(0).default(60),
+        // The backup stays shut once today's Helius credits reach this. 0 turns it off. Keep it below
+        // dailyCreditBudget, which stops the bot outright.
+        backupDailyCredits: z.number().min(0).default(20_000),
         // The bot stops scanning for the day once it has used this many Helius credits (free plan: 1,000,000 a month).
         dailyCreditBudget: z.number().positive().default(30_000),
         rugchecksPerMinute: z.number().positive().default(8),

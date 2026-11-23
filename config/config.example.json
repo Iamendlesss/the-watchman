@@ -72,6 +72,9 @@
     "stallSeconds": 60,
     "streamConnections": 2,
     "streamStaggerSeconds": 20,
+    "backupAfterSeconds": 5,
+    "backupHoldSeconds": 60,
+    "backupDailyCredits": 20000,
     "rugchecksPerMinute": 8,
     "dailyCreditBudget": 30000
   },

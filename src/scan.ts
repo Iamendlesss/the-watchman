@@ -82,7 +82,8 @@ export async function runScan(cfg: Config, opts: ScanOptions, hooks: ScanHooks =
   // STREAM_WS_URL lets the live stream come from another provider (it is used as given, and Helius's key is never
   // sent to it). Helius is then only used for the few RPC calls (backfill and mint checks).
   const customStream = (process.env.STREAM_WS_URL ?? "").trim();
-  const wsUrl = customStream || `${cfg.scanner.heliusWsBase}/?api-key=${heliusKey}`;
+  const heliusWsUrl = `${cfg.scanner.heliusWsBase}/?api-key=${heliusKey}`;
+  const wsUrl = customStream || heliusWsUrl;
   const rpcUrl = `${cfg.scanner.heliusRpcBase}/?api-key=${heliusKey}`;
   const rugKey = (process.env.RUGCHECK_API_KEY ?? "").trim() || undefined;
 
@@ -125,10 +126,22 @@ export async function runScan(cfg: Config, opts: ScanOptions, hooks: ScanHooks =
   const seen = new Map<string, Set<string>>();
   const firstLive = new Map<string, string>();
 
+  // With a free stream, Helius is a backup that opens only during an outage of every free connection.
+  const backupCap = cfg.scanner.backupDailyCredits;
+  const useBackup = Boolean(customStream) && backupCap > 0;
+  let counted = 0; // credits already written to the ledger for today
+  const creditsToday = () => ledger.creditsUsed(utcDay()) + usage.report().creditsUsed - counted;
+
   console.log(`Scanning pump.fun launches for ${opts.minutes} minute(s). Read-only: no trades, no wallet key.`);
   console.log(
     `Live stream: ${customStream ? "custom provider (STREAM_WS_URL)" : "Helius"}. Helius credits used today by this bot: ${Math.round(ledger.creditsUsed(utcDay())).toLocaleString()} of ${budget.toLocaleString()}.`,
   );
+  if (useBackup) {
+    console.log(
+      `Helius backup: opens after ${cfg.scanner.backupAfterSeconds}s with every free connection down, ` +
+        `until today's Helius credits reach ${backupCap.toLocaleString()}.`,
+    );
+  }
   console.log(
     `Coins with no traction after ${cfg.scanner.earlyCheckSeconds}s are dropped; the rest are judged at ${cfg.scanner.observationSeconds}s.\n`,
   );
@@ -159,6 +172,17 @@ export async function runScan(cfg: Config, opts: ScanOptions, hooks: ScanHooks =
       if (id === "launches") console.log(`[${clock()}] stream: ${label}subscribed to launches`);
     },
     onBlindChange: (down) => hooks.onStreamChange?.(down),
+    backup: useBackup
+      ? {
+          url: heliusWsUrl,
+          label: "Helius",
+          afterMs: cfg.scanner.backupAfterSeconds * 1000,
+          holdMs: cfg.scanner.backupHoldSeconds * 1000,
+          onBytes: (n) => usage.add(n, true),
+          blocked: () =>
+            creditsToday() >= backupCap ? `today's Helius credits reached the backup cap of ${backupCap.toLocaleString()}` : null,
+        }
+      : undefined,
   });
 
   stream.subscribe("launches", PUMP_MINT_AUTHORITY, (slot, logs, signature) => {
@@ -278,14 +302,15 @@ export async function runScan(cfg: Config, opts: ScanOptions, hooks: ScanHooks =
     console.log(
       `[${clock()}] launches ${stats.launches}, dropped early ${stats.earlyCut}, judged ${stats.judged}, passed ${stats.passed}, ` +
         `streaming ${stream.activeSubscriptions - 1} coins, data ${u.megabytes.toFixed(1)} MB, ` +
-        `stream drops ${stream.reconnects} (blind ${Math.round(stream.blindMs / 1000)}s), RPC calls ${u.rpcCalls}, decode errors ${decoder.stats.errors}` +
+        `stream drops ${stream.reconnects} (blind ${Math.round(stream.blindMs / 1000)}s)` +
+        (stream.backupUses ? `, Helius backup ${Math.round(stream.backupMs / 1000)}s (${Math.round(u.streamCredits)} credits)` : "") +
+        `, RPC calls ${u.rpcCalls}, decode errors ${decoder.stats.errors}` +
         (hooks.status ? `\n${" ".repeat(11)}${hooks.status()}` : ""),
     );
   }, 60_000);
 
   stream.start();
   let budgetHit = false;
-  let counted = 0; // credits already written to the ledger for today
   await new Promise<void>((resolve) => {
     // Credit guard: record what this run has used so far, and stop once today's budget is spent.
     const guard = setInterval(() => {
@@ -328,6 +353,12 @@ export async function runScan(cfg: Config, opts: ScanOptions, hooks: ScanHooks =
     `Stream:             ${stream.connections} connection(s), ${stream.reconnects} drop(s), blind ${blindSec.toFixed(0)}s` +
       (u.seconds > 0 ? ` (${pct(blindSec / u.seconds)} of the run with no connection open)` : ""),
   );
+  if (useBackup) {
+    console.log(
+      `Helius backup:      opened ${stream.backupUses} time(s), ${(stream.backupMs / 1000).toFixed(0)}s in all, ` +
+        `${u.meteredMegabytes.toFixed(1)} MB = ${Math.round(u.streamCredits).toLocaleString()} credits`,
+    );
+  }
   console.log(`Launches seen:      ${stats.launches}`);
   console.log(
     `Skipped at launch:  ${skippedTotal}${skippedTotal ? ` (${[...stats.skipped.entries()].map(([k, n]) => `${k} ${n}`).join(", ")})` : ""}`,
@@ -348,7 +379,11 @@ export async function runScan(cfg: Config, opts: ScanOptions, hooks: ScanHooks =
   console.log("\nHelius credit use:");
   console.log(
     `  stream: ${u.megabytes.toFixed(1)} MB in ${u.messages} messages = ${Math.round(u.streamCredits).toLocaleString()} credits` +
-      (customStream ? " (custom provider: no Helius credits)" : ""),
+      (customStream
+        ? u.meteredMegabytes > 0
+          ? ` (custom provider free, Helius backup ${u.meteredMegabytes.toFixed(1)} MB)`
+          : " (custom provider: no Helius credits)"
+        : ""),
   );
   console.log(`  RPC:    ${u.rpcCalls} calls = ${u.rpcCredits.toLocaleString()} credits (assuming 1 credit per call)`);
   console.log(
