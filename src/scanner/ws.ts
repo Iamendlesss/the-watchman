@@ -76,8 +76,10 @@ export class LogStream {
     }, Math.max(50, Math.min(5000, stall / 2)));
   }
 
+  /** Close the connection. It can be started again later and re-creates every subscription. */
   stop(): void {
     this.stopped = true;
+    this.isOpen = false; // stop() reports no close, and a later start() must not report one for this socket
     if (this.watchdog) clearInterval(this.watchdog);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.ws?.close();
@@ -230,6 +232,22 @@ export interface RedundantLogStreamOptions extends Omit<LogStreamOptions, "onSub
   onSubscribed?: (id: string, label: string) => void;
   /** Called with true when the last open connection closes, and with false when one opens again. */
   onBlindChange?: (blind: boolean) => void;
+  /** A standby connection to another provider, used only while every main connection is down. */
+  backup?: BackupOptions;
+}
+
+export interface BackupOptions {
+  url: string;
+  /** Shown in status lines, e.g. "Helius". Never the URL, which holds the API key. */
+  label: string;
+  /** Open the backup once every main connection has been down this long. */
+  afterMs: number;
+  /** Close it again once a main connection has stayed up this long. */
+  holdMs: number;
+  /** A reason the backup must stay shut right now (for example a credit cap), or null. Checked while it is open too. */
+  blocked?: () => string | null;
+  /** The backup's data, kept apart from the main connections' because it may be billed. */
+  onBytes?: (n: number) => void;
 }
 
 /**
@@ -237,20 +255,34 @@ export interface RedundantLogStreamOptions extends Omit<LogStreamOptions, "onSub
  * every 30-80s (seen 2026-10-21, close code 1006), and each drop costs 5-10s of data. Drops on separate
  * connections were independent, so while one reconnects another keeps data flowing. A transaction that arrives
  * on more than one connection is handed to its handler once.
+ *
+ * An optional backup connection to another provider (Helius, whose data costs credits) stays shut until every
+ * main connection has been down for `backup.afterMs`, and closes again once a main connection has stayed up for
+ * `backup.holdMs`. The short double drops seen on 2026-11-19 (under 2s) never open it, a long outage does.
  */
 export class RedundantLogStream {
   private readonly streams: LogStream[];
+  private readonly backup: LogStream | null;
   private readonly ids = new Set<string>();
   // Two generations of "already delivered" keys, rotated every minute, so the memory stays bounded.
   private seen = new Set<string>();
   private seenBefore = new Set<string>();
   private rotateTimer: ReturnType<typeof setInterval> | null = null;
   private readonly startTimers: ReturnType<typeof setTimeout>[] = [];
-  private openCount = 0;
+  private mainOpen = 0;
+  private backupOpen = false;
   private blindSince: number | null = null;
   private blindTotal = 0;
+  private mainDownSince: number | null = null;
+  private mainUpSince: number | null = null;
+  private backupTimer: ReturnType<typeof setInterval> | null = null;
+  private backupSince: number | null = null;
+  private backupTotal = 0;
+  private blockedNoted = false;
   /** Notifications already delivered by another connection. */
   duplicatesDropped = 0;
+  /** How many times the backup connection was opened. */
+  backupUses = 0;
 
   constructor(private readonly o: RedundantLogStreamOptions) {
     const n = Math.max(1, Math.floor(o.connections));
@@ -263,11 +295,32 @@ export class RedundantLogStream {
         onBytes: o.onBytes,
         onStatus: (m) => o.onStatus?.(`${label}${m}`),
         onSubscribed: (id) => o.onSubscribed?.(id, label),
-        onConnectionChange: (open) => this.onConnectionChange(open),
+        onConnectionChange: (open) => this.onConnectionChange(open, false),
       });
     });
+    const b = o.backup;
+    this.backup = b
+      ? new LogStream({
+          url: b.url,
+          stallMs: o.stallMs,
+          WebSocketCtor: o.WebSocketCtor,
+          onBytes: b.onBytes,
+          onStatus: (m) => o.onStatus?.(`[${b.label}] ${m}`),
+          onSubscribed: (id) => o.onSubscribed?.(id, `[${b.label}] `),
+          onConnectionChange: (open) => this.onConnectionChange(open, true),
+        })
+      : null;
   }
 
+  private get all(): LogStream[] {
+    return this.backup ? [...this.streams, this.backup] : this.streams;
+  }
+
+  private get openCount(): number {
+    return this.mainOpen + (this.backupOpen ? 1 : 0);
+  }
+
+  /** Main connections (the backup is not counted). */
   get connections(): number {
     return this.streams.length;
   }
@@ -277,20 +330,25 @@ export class RedundantLogStream {
   }
 
   get reconnects(): number {
-    return this.streams.reduce((a, s) => a + s.reconnects, 0);
+    return this.all.reduce((a, s) => a + s.reconnects, 0);
   }
 
   get notifications(): number {
-    return this.streams.reduce((a, s) => a + s.notifications, 0);
+    return this.all.reduce((a, s) => a + s.notifications, 0);
   }
 
   get failedDropped(): number {
-    return this.streams.reduce((a, s) => a + s.failedDropped, 0);
+    return this.all.reduce((a, s) => a + s.failedDropped, 0);
   }
 
-  /** Milliseconds, after the first connection opened, during which no connection was open. */
+  /** Milliseconds, after the first connection opened, during which no connection (backup included) was open. */
   get blindMs(): number {
     return this.blindTotal + (this.blindSince === null ? 0 : Date.now() - this.blindSince);
+  }
+
+  /** Milliseconds the backup connection has been running. */
+  get backupMs(): number {
+    return this.backupTotal + (this.backupSince === null ? 0 : Date.now() - this.backupSince);
   }
 
   start(): void {
@@ -302,23 +360,32 @@ export class RedundantLogStream {
       if (i === 0) s.start();
       else this.startTimers.push(setTimeout(() => s.start(), i * (this.o.staggerMs ?? 20_000)));
     });
+    if (this.o.backup) {
+      this.mainDownSince = Date.now(); // nothing is open yet
+      this.backupTimer = setInterval(() => this.checkBackup(), Math.max(50, Math.min(1000, this.o.backup.afterMs / 4)));
+    }
   }
 
   stop(): void {
     this.startTimers.forEach(clearTimeout);
     if (this.rotateTimer) clearInterval(this.rotateTimer);
+    if (this.backupTimer) clearInterval(this.backupTimer);
+    if (this.backupSince !== null) {
+      this.backupTotal += Date.now() - this.backupSince;
+      this.backupSince = null;
+    }
     if (this.blindSince !== null) {
       this.blindTotal += Date.now() - this.blindSince;
       this.blindSince = null;
     }
-    for (const s of this.streams) s.stop();
+    for (const s of this.all) s.stop();
   }
 
   /** Watch transactions that mention `address`, on every connection. Safe to repeat. */
   subscribe(id: string, address: string, handler: LogHandler): void {
     if (this.ids.has(id)) return;
     this.ids.add(id);
-    if (this.streams.length === 1) return this.streams[0]!.subscribe(id, address, handler); // nothing to deduplicate
+    if (this.all.length === 1) return this.streams[0]!.subscribe(id, address, handler); // nothing to deduplicate
     const once: LogHandler = (slot, logs, signature) => {
       if (signature) {
         const key = `${id} ${signature}`;
@@ -330,31 +397,74 @@ export class RedundantLogStream {
       }
       handler(slot, logs, signature);
     };
-    for (const s of this.streams) s.subscribe(id, address, once);
+    for (const s of this.all) s.subscribe(id, address, once);
   }
 
   unsubscribe(id: string): void {
     if (!this.ids.delete(id)) return;
-    for (const s of this.streams) s.unsubscribe(id);
+    for (const s of this.all) s.unsubscribe(id);
   }
 
-  private onConnectionChange(open: boolean): void {
+  /** Runs on a timer: opens the backup after a long enough main outage, and closes it when it is no longer needed. */
+  private checkBackup(): void {
+    const b = this.o.backup!;
     const now = Date.now();
-    if (open) {
-      if (this.openCount === 0 && this.blindSince !== null) {
-        const gap = now - this.blindSince;
-        this.blindTotal += gap;
-        this.blindSince = null;
-        if (this.streams.length > 1) this.o.onStatus?.(`a connection is back after ${(gap / 1000).toFixed(1)}s with none open`);
-        this.o.onBlindChange?.(false);
+    const blocked = b.blocked?.() ?? null;
+    if (this.backupSince === null) {
+      if (this.mainOpen > 0 || this.mainDownSince === null || now - this.mainDownSince < b.afterMs) return;
+      if (blocked) {
+        if (!this.blockedNoted) this.o.onStatus?.(`[${b.label}] backup not opened: ${blocked}`);
+        this.blockedNoted = true;
+        return;
       }
-      this.openCount++;
+      this.o.onStatus?.(
+        `[${b.label}] every main connection has been down for ${((now - this.mainDownSince) / 1000).toFixed(1)}s; opening the backup`,
+      );
+      this.backupSince = now;
+      this.backupUses++;
+      this.backup!.start();
       return;
     }
-    this.openCount--;
-    if (this.openCount === 0) {
+    if (blocked) this.closeBackup(blocked);
+    else if (this.mainUpSince !== null && now - this.mainUpSince >= b.holdMs) {
+      this.closeBackup(`a main connection has been up for ${Math.round((now - this.mainUpSince) / 1000)}s`);
+    }
+  }
+
+  private closeBackup(reason: string): void {
+    this.o.onStatus?.(`[${this.o.backup!.label}] closing the backup: ${reason}`);
+    this.backupTotal += Date.now() - this.backupSince!;
+    this.backupSince = null;
+    this.backup!.stop();
+    if (this.backupOpen) this.onConnectionChange(false, true); // stop() reports no close of its own
+  }
+
+  private onConnectionChange(open: boolean, isBackup: boolean): void {
+    const now = Date.now();
+    const before = this.openCount;
+    if (isBackup) this.backupOpen = open;
+    else {
+      this.mainOpen += open ? 1 : -1;
+      if (open && this.mainOpen === 1) {
+        this.mainDownSince = null;
+        this.mainUpSince = now;
+        this.blockedNoted = false;
+      } else if (!open && this.mainOpen === 0) {
+        this.mainDownSince = now;
+        this.mainUpSince = null;
+      }
+    }
+    const after = this.openCount;
+    const several = this.all.length > 1;
+    if (before === 0 && after > 0 && this.blindSince !== null) {
+      const gap = now - this.blindSince;
+      this.blindTotal += gap;
+      this.blindSince = null;
+      if (several) this.o.onStatus?.(`a connection is back after ${(gap / 1000).toFixed(1)}s with none open`);
+      this.o.onBlindChange?.(false);
+    } else if (before > 0 && after === 0) {
       this.blindSince = now;
-      if (this.streams.length > 1) this.o.onStatus?.("all connections are down; no data until one reconnects");
+      if (several) this.o.onStatus?.("all connections are down; no data until one reconnects");
       this.o.onBlindChange?.(true);
     }
   }

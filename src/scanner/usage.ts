@@ -1,6 +1,8 @@
 export interface UsageReport {
   seconds: number;
   megabytes: number;
+  /** The part of `megabytes` that Helius bills (all of it on a Helius stream, only the backup's on a free one). */
+  meteredMegabytes: number;
   messages: number;
   rpcCalls: number;
   streamCredits: number;
@@ -17,12 +19,13 @@ export interface UsageReport {
  */
 export class UsageMeter {
   bytes = 0;
+  meteredBytes = 0;
   messages = 0;
   rpcCalls = 0;
   private readonly startedAt: number;
   /**
    * `streamIsMetered` is false when the WebSocket comes from a provider other than Helius: the data is still
-   * counted in MB, but it costs no Helius credits.
+   * counted in MB, but it costs no Helius credits. Data from a Helius backup connection is added with `metered` true.
    */
   constructor(
     private readonly now: () => number = Date.now,
@@ -30,8 +33,9 @@ export class UsageMeter {
   ) {
     this.startedAt = now();
   }
-  add(bytes: number): void {
+  add(bytes: number, metered: boolean = this.streamIsMetered): void {
     this.bytes += bytes;
+    if (metered) this.meteredBytes += bytes;
     this.messages++;
   }
   addRpc(n: number): void {
@@ -40,13 +44,15 @@ export class UsageMeter {
   report(freePlanCredits = 1_000_000): UsageReport {
     const seconds = Math.max(1, (this.now() - this.startedAt) / 1000);
     const megabytes = this.bytes / 1_000_000;
-    const streamCredits = this.streamIsMetered ? (megabytes / 0.1) * 2 : 0;
+    const meteredMegabytes = this.meteredBytes / 1_000_000;
+    const streamCredits = (meteredMegabytes / 0.1) * 2;
     const rpcCredits = this.rpcCalls;
     const creditsUsed = streamCredits + rpcCredits;
     const creditsPerMonth = (creditsUsed / seconds) * 30 * 24 * 3600;
     return {
       seconds,
       megabytes,
+      meteredMegabytes,
       messages: this.messages,
       rpcCalls: this.rpcCalls,
       streamCredits,

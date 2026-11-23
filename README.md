@@ -168,6 +168,11 @@ plan's 1,000,000 credits cover about 3 hours of scanning per day.
   drops connections every 30-80s, and drops on separate connections are independent, so one covers the other's
   gap. The status line shows `stream drops N (blind Ns)`, where blind means no connection was open. The Helius
   stream always uses one connection, because its data costs credits.
+- `scanner.backupAfterSeconds` (default 5), `scanner.backupHoldSeconds` (default 60) and
+  `scanner.backupDailyCredits` (default 20,000): with `STREAM_WS_URL` set, a Helius connection opens only once every
+  free connection has been down for 5s, and closes once a free connection has stayed up for 60s. Its data costs Helius
+  credits (20 per MB), so it stays shut once the day's credits reach the cap. 0 turns it off. The status line adds
+  `Helius backup Ns (N credits)` once it has been used, and the scan report shows its total.
 
 ## Safety notes
 

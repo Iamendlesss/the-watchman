@@ -91,6 +91,50 @@ describe("scan credit budget and custom stream", () => {
     expect(out).not.toMatch(/127\.0\.0\.1/);
   }, 15_000);
 
+  it("opens the Helius backup when the free stream is down, and counts its data as credits", async () => {
+    const helius = bulkyServer();
+    process.env.STREAM_WS_URL = "ws://127.0.0.1:1"; // the free provider refuses every connection
+    process.env.HELIUS_API_KEY = "helius-secret-should-not-leak";
+    const dbPath = tmpDb();
+    const cfg = parseConfig({
+      scanner: { heliusWsBase: helius.url, heliusRpcBase: "http://127.0.0.1:1", streamStaggerSeconds: 0.2, backupAfterSeconds: 0.3 },
+      paths: { dbPath, stopFile: "STOP" },
+    });
+    const lines = capture();
+    await runScan(cfg, { minutes: 0.05, debug: false });
+    const out = lines.join("\n");
+    expect(out).toMatch(/Helius backup: opens after 0\.3s with every free connection down, until today's Helius credits reach 20,000/);
+    expect(out).toMatch(/stream: \[Helius\] every main connection has been down for/);
+    expect(out).toMatch(/stream: \[Helius\] subscribed to launches/);
+    expect(out).toMatch(/Helius backup: {6}opened 1 time\(s\)/);
+    expect(out).toMatch(/\(custom provider free, Helius backup 0\.3 MB\)/);
+    expect(out).not.toContain("helius-secret-should-not-leak");
+    expect(out).not.toMatch(/127\.0\.0\.1/);
+    const l = new Ledger(dbPath);
+    expect(l.creditsUsed(new Date().toISOString().slice(0, 10))).toBeGreaterThan(5); // 0.3 MB = 6 credits
+    l.close();
+  }, 15_000);
+
+  it("keeps the Helius backup shut once today's credits reach its cap", async () => {
+    const helius = bulkyServer();
+    process.env.STREAM_WS_URL = "ws://127.0.0.1:1";
+    process.env.HELIUS_API_KEY = "k";
+    const dbPath = tmpDb();
+    const l = new Ledger(dbPath);
+    l.addCredits(new Date().toISOString().slice(0, 10), 100);
+    l.close();
+    const cfg = parseConfig({
+      scanner: { heliusWsBase: helius.url, heliusRpcBase: "http://127.0.0.1:1", backupAfterSeconds: 0.3, backupDailyCredits: 100 },
+      paths: { dbPath, stopFile: "STOP" },
+    });
+    const lines = capture();
+    await runScan(cfg, { minutes: 0.03, debug: false });
+    const out = lines.join("\n");
+    expect(out).toMatch(/\[Helius\] backup not opened: today's Helius credits reached the backup cap of 100/);
+    expect(out).toMatch(/Helius backup: {6}opened 0 time\(s\)/);
+    expect(out).not.toMatch(/\[Helius\] subscribed/);
+  }, 15_000);
+
   it("ends the run cleanly when the Terminal window is closed (SIGHUP), and leaves no signal listeners behind", async () => {
     const srv = bulkyServer();
     process.env.STREAM_WS_URL = srv.url;
